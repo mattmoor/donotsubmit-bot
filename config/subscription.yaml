@@ -1,14 +1,14 @@
 apiVersion: eventing.knative.dev/v1alpha1
 kind: Subscription
 metadata:
-  name: mattmoor-kontext-subscription
+  name: donotsubmit-bot-subscription
 spec:
   channel:
     apiVersion: eventing.knative.dev/v1alpha1
     kind: Channel
-    name: githubchannel
+    name: donotsubmit-bot-channel
   subscriber:
     ref:
       apiVersion: serving.knative.dev/v1alpha1
       kind: Service
-      name: hello-github
+      name: donotsubmit-bot

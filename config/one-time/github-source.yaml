@@ -1,7 +1,7 @@
 apiVersion: eventing.knative.dev/v1alpha1
 kind: Channel
 metadata:
-  name: githubchannel
+  name: donotsubmit-bot-channel
 spec:
   provisioner:
     apiVersion: eventing.knative.dev/v1alpha1
@@ -11,15 +11,12 @@ spec:
 apiVersion: sources.eventing.knative.dev/v1alpha1
 kind: GitHubSource
 metadata:
-  name: mattmoor-kontext
+  name: donotsubmit-bot-source
 spec:
   # The types of events to which we are listening.
   eventTypes:
   - pull_request
-  - pull_request_review
-  - pull_request_review_comment
-  - issue_comment
-  - push
+  - issues
 
   # The repository to which we are listening.
   # TODO(mattmoor): What if I want multiple?  What about Org?
@@ -44,4 +41,4 @@ spec:
   sink:
     apiVersion: eventing.knative.dev/v1alpha1
     kind: Channel
-    name: githubchannel
+    name: donotsubmit-bot-channel

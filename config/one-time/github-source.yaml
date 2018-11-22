@@ -16,7 +16,6 @@ spec:
   # The types of events to which we are listening.
   eventTypes:
   - pull_request
-  - issues
 
   # The repository to which we are listening.
   # TODO(mattmoor): What if I want multiple?  What about Org?

@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 
+	"sourcegraph.com/sourcegraph/go-diff/diff"
+
 	"github.com/google/go-github/github"
 )
 
@@ -40,11 +42,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			log.Printf("Error handling %T: %v", event, err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
-	case *github.IssuesEvent:
-		if err := HandleIssues(event); err != nil {
-			log.Printf("Error handling %T: %v", event, err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
 	default:
 		log.Printf("Unrecognized event: %T", event)
 		http.Error(w, "Unknown event", http.StatusBadRequest)
@@ -52,32 +49,104 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func HandlePullRequest(pre *github.PullRequestEvent) error {
-	log.Printf("PR: %v", pre.GetPullRequest().String())
+// TODO(mattmoor): For bonus points, return the position to comment on.
+func HasDoNotSubmit(cf *github.CommitFile) bool {
+	hs, err := diff.ParseHunks([]byte(cf.GetPatch()))
+	if err != nil {
+		log.Printf("ERROR PARSING HUNKS: %v", err)
+		return false
+	}
 
-	ctx := context.Background()
-	ghc := GetClient(ctx)
+	// Search the lines of each diff "hunk" for an addition line containing
+	// the words "DO NOT SUBMIT".
+	for _, hunk := range hs {
+		s := string(hunk.Body)
+		lines := strings.Split(s, "\n")
+		for _, line := range lines {
+			if !strings.HasPrefix(line, "+") {
+				continue
+			}
+			if strings.Contains(line, "DO NOT SUBMIT") {
+				return true
+			}
+		}
+	}
 
-	msg := fmt.Sprintf("PR event: %v", pre.GetAction())
-	_, _, err := ghc.Issues.CreateComment(ctx,
-		pre.Repo.Owner.GetLogin(), pre.Repo.GetName(), pre.GetNumber(),
-		&github.IssueComment{
-			Body: &msg,
-		})
-	return err
+	return false
 }
 
-func HandleIssues(ie *github.IssuesEvent) error {
-	log.Printf("Issue: %v", ie.GetIssue().String())
+func HasLabel(pr *github.PullRequest, label string) bool {
+	for _, l := range pr.Labels {
+		if l.GetName() == label {
+			return true
+		}
+	}
+	return false
+}
 
+// Determine whether we need a `/hold` on this PR.
+func NeedsHold(ctx context.Context, pre *github.PullRequestEvent) (bool, error) {
+	ghc := GetClient(ctx)
+
+	owner, repo := pre.Repo.Owner.GetLogin(), pre.Repo.GetName()
+
+	lopt := &github.ListOptions{}
+	for {
+		cfs, resp, err := ghc.PullRequests.ListFiles(ctx, owner, repo, pre.GetNumber(), lopt)
+		if err != nil {
+			return false, err
+		}
+		for _, cf := range cfs {
+			if HasDoNotSubmit(cf) {
+				return true, nil
+			}
+		}
+		if lopt.Page == resp.NextPage {
+			break
+		}
+		lopt.Page = resp.NextPage
+	}
+
+	return false, nil
+}
+
+func HandlePullRequest(pre *github.PullRequestEvent) error {
+	pr := pre.GetPullRequest()
+	log.Printf("PR: %v", pr.String())
+
+	// Ignore closed PRs
+	if pr.GetState() == "closed" {
+		return nil
+	}
 	ctx := context.Background()
 	ghc := GetClient(ctx)
 
-	msg := fmt.Sprintf("Issues event: %v", ie.GetAction())
-	_, _, err := ghc.Issues.CreateComment(ctx,
-		ie.Repo.Owner.GetLogin(), ie.Repo.GetName(), ie.GetIssue().GetNumber(),
-		&github.IssueComment{
-			Body: &msg,
-		})
-	return err
+	want, err := NeedsHold(ctx, pre)
+	if err != nil {
+		return err
+	}
+
+	holdLabel := "do-not-merge/hold"
+	owner, repo := pre.Repo.Owner.GetLogin(), pre.Repo.GetName()
+
+	got := HasLabel(pr, holdLabel)
+
+	// Want, but don't have.
+	if want && !got {
+		// Add the label
+		_, _, err = ghc.Issues.AddLabelsToIssue(ctx, owner, repo, pr.GetNumber(),
+			[]string{holdLabel})
+		return err
+	}
+
+	// Have, but don't want.
+	// TODO(mattmoor): We probably don't want to do this because there isn't a good way
+	// to determine who put the hold on the PR (it might not have been us!)
+	if !want && got {
+		_, err = ghc.Issues.RemoveLabelForIssue(ctx, owner, repo, pr.GetNumber(),
+			holdLabel)
+		return err
+	}
+
+	return nil
 }

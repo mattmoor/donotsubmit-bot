@@ -2,7 +2,6 @@ package github
 
 import (
 	"context"
-	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -11,6 +10,11 @@ import (
 	"sourcegraph.com/sourcegraph/go-diff/diff"
 
 	"github.com/google/go-github/github"
+)
+
+var (
+	botName        = "DO NOT SUBMIT"
+	botDescription = `Check for "DO NOT SUBMIT" in added lines.`
 )
 
 func Handler(w http.ResponseWriter, r *http.Request) {
@@ -75,15 +79,6 @@ func HasDoNotSubmit(cf *github.CommitFile) bool {
 	return false
 }
 
-func HasLabel(pr *github.PullRequest, label string) bool {
-	for _, l := range pr.Labels {
-		if l.GetName() == label {
-			return true
-		}
-	}
-	return false
-}
-
 // Determine whether we need a `/hold` on this PR.
 func NeedsHold(ctx context.Context, pre *github.PullRequestEvent) (bool, error) {
 	ghc := GetClient(ctx)
@@ -126,27 +121,24 @@ func HandlePullRequest(pre *github.PullRequestEvent) error {
 		return err
 	}
 
-	holdLabel := "do-not-merge/hold"
 	owner, repo := pre.Repo.Owner.GetLogin(), pre.Repo.GetName()
 
-	got := HasLabel(pr, holdLabel)
-
-	// Want, but don't have.
-	if want && !got {
-		// Add the label
-		_, _, err = ghc.Issues.AddLabelsToIssue(ctx, owner, repo, pr.GetNumber(),
-			[]string{holdLabel})
-		return err
+	// Determine the check state.
+	var state string
+	if want {
+		state = "failure"
+	} else {
+		state = "success"
 	}
 
-	// Have, but don't want.
-	// TODO(mattmoor): We probably don't want to do this because there isn't a good way
-	// to determine who put the hold on the PR (it might not have been us!)
-	if !want && got {
-		_, err = ghc.Issues.RemoveLabelForIssue(ctx, owner, repo, pr.GetNumber(),
-			holdLabel)
-		return err
-	}
+	sha := pre.GetPullRequest().GetHead().GetSHA()
 
-	return nil
+	_, _, err = ghc.Repositories.CreateStatus(ctx, owner, repo, sha, &github.RepoStatus{
+		Context:     &botName,
+		State:       &state,
+		Description: &botDescription,
+		// TODO(mattmoor): Consider adding a target URL for where we found the string.
+	})
+
+	return err
 }
